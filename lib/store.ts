@@ -75,11 +75,14 @@ export function createStore(database = getDb, inspectSchema = schemaStatus, env:
     const schema = await inspectSchema();
     let platformUrl = '';
     try { platformUrl = platformBaseUrl(env).origin; } catch { /* Display only a configured, public origin. */ }
+    // The platform database is optional; SSO uses its own server credential.
+    const requiredKeys = ['DATABASE_URL', 'PLATFORM_URL', 'APP_URL', 'QQ_APP_ID', 'QQ_CLIENT_SECRET', 'DB_SCHEMA_MODE', 'DB_SCHEMA_TOKEN'];
+    if (env.PLATFORM_AUTH_MODE === 'sso') requiredKeys.push('BPEBOT_SSO_CLIENT_SECRET');
     return {
       appIdMasked: maskedId(env.QQ_APP_ID), platformUrl, webhookUrl: safePublicUrl(env.APP_URL, '/api/webhook'),
       schemaMode: schema.mode, schemaVersion: schema.currentVersion, expectedSchemaVersion: SCHEMA_VERSION,
       schemaAppliedAt: schema.appliedAt, schemaAppliedBy: schema.appliedBy,
-      configured: Object.fromEntries(['DATABASE_URL', 'PLATFORM_DATABASE_URL', 'PLATFORM_URL', 'APP_URL', 'QQ_APP_ID', 'QQ_CLIENT_SECRET', 'DB_SCHEMA_MODE', 'DB_SCHEMA_TOKEN'].map(key => [key, !!env[key]?.trim()])),
+      configured: Object.fromEntries(requiredKeys.map(key => [key, !!env[key]?.trim()])),
       capabilities: { ...QQ_CAPABILITIES, moderation: false },
     };
   }

@@ -174,11 +174,27 @@ test('policy validator rejects unknown values and accepts partial updates', () =
 
 test('settings expose only masked id, public urls, booleans and schema metadata', async () => {
   const database = async () => ({ query: async () => ({ rows: [] }) }) as never;
-  const configuration = { ...env, DATABASE_URL: 'postgresql://secret:password@db.example/private', PLATFORM_DATABASE_URL: 'postgresql://private', QQ_APP_ID: '1234567890' };
+  const configuration = { ...env, DATABASE_URL: 'postgresql://secret:password@db.example/private', PLATFORM_DATABASE_URL: 'postgresql://private', QQ_APP_ID: '1234567890', PLATFORM_AUTH_MODE: 'sso', BPEBOT_SSO_CLIENT_SECRET: 'private-sso-credential' };
   const store = createStore(database, async () => ({ mode: 'verify', expectedVersion: 1, currentVersion: 1, ready: true, appliedAt: null, appliedBy: null }), configuration);
   const state = await store.getState();
   assert.equal(state.settings.appIdMasked, '******7890');
   const serialized = JSON.stringify(state.settings);
-  for (const secret of [configuration.DATABASE_URL, configuration.PLATFORM_DATABASE_URL, configuration.QQ_CLIENT_SECRET, configuration.DB_SCHEMA_TOKEN, configuration.QQ_APP_ID]) assert.ok(!serialized.includes(secret));
+  for (const secret of [configuration.DATABASE_URL, configuration.PLATFORM_DATABASE_URL, configuration.QQ_CLIENT_SECRET, configuration.DB_SCHEMA_TOKEN, configuration.QQ_APP_ID, configuration.BPEBOT_SSO_CLIENT_SECRET]) assert.ok(!serialized.includes(secret));
   assert.equal(state.settings.capabilities.joinApproval, false);
+});
+
+test('settings require SSO credentials only in SSO mode and never require the optional platform database', async () => {
+  const database = async () => ({ query: async () => ({ rows: [] }) }) as never;
+  const schema = async () => ({ mode: 'verify' as const, expectedVersion: 1, currentVersion: 1, ready: true, appliedAt: null, appliedBy: null });
+  const base = { ...env, DATABASE_URL: 'postgresql://bot.example/bot', DB_SCHEMA_MODE: 'verify', PLATFORM_DATABASE_URL: '', BPEBOT_SSO_CLIENT_SECRET: '' };
+  for (const mode of ['sso', 'api']) {
+    for (const secret of ['', '   ', 'private-sso-credential']) {
+      const state = await createStore(database, schema, { ...base, PLATFORM_AUTH_MODE: mode, BPEBOT_SSO_CLIENT_SECRET: secret }).getState();
+      const configured = state.settings.configured;
+      assert.equal(Object.hasOwn(configured, 'PLATFORM_DATABASE_URL'), false);
+      assert.equal(Object.hasOwn(configured, 'BPEBOT_SSO_CLIENT_SECRET'), mode === 'sso');
+      assert.deepEqual(Object.entries(configured).filter(([, present]) => !present).map(([key]) => key),
+        mode === 'sso' && !secret.trim() ? ['BPEBOT_SSO_CLIENT_SECRET'] : []);
+    }
+  }
 });
