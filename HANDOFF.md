@@ -6,7 +6,7 @@
 
 在 `BPEBOT/` 建立了独立、可构建的 Next.js App Router 应用，六个管理页面已接真实管理 API。主要闭环为：复用平台管理员身份 → 指令配置与预览 → 接收签名事件 → 权限检查与去重 → 被动回复 → 查询日志。审批、警告、禁言目前保留草稿或显式未支持状态，不能对外宣称完整 V0.1 已上线。
 
-本轮只新增或编辑 `BPEBOT/` 内文件，未修改主平台业务代码及账号表。仓库已有大量其他未提交修改，均不属于本轮交付；不要执行整仓库重置或清理。BPEBOT 现作为独立 Git 仓库维护；尚未部署。
+基础开发阶段只新增或编辑 `BPEBOT/` 内文件；后续 SSO 阶段对主平台做了专用增量接入，详见文末交接。仓库已有大量其他未提交修改，均不属于本轮交付；不要执行整仓库重置或清理。BPEBOT 现作为独立 Git 仓库维护；尚未部署。
 
 ## 接续入口
 
@@ -96,10 +96,27 @@ npm run dev
 
 已配置生产环境的 `PLATFORM_URL`、`APP_URL`、`DB_SCHEMA_MODE=verify`、随机生成的 `DB_SCHEMA_TOKEN`；平台地址同时配置了 Preview。迁移令牌只存 Vercel Secret 和本机被忽略的 `.env.local`，不要输出或提交。`.vercel/` 和 `.env.local` 均忽略。
 
-待用户在 Vercel 项目设置中补充生产环境的 `DATABASE_URL`、`PLATFORM_DATABASE_URL`、`QQ_APP_ID`、`QQ_CLIENT_SECRET`，然后重新部署。若两个业务共用同一云端数据库，平台连接地址也可使用同一地址；不要上传父项目本机数据库口令，也不要使用 localhost。配置完成后以 `x-schema-token` 调用 `POST /api/admin/migrate` 初始化机器人 schema，验证后保持 verify 模式。尚未完成数据库初始化和真实 QQ 验收，不能称为完整上线。
+待用户在 Vercel 项目设置中补充生产环境的 `DATABASE_URL`、`QQ_APP_ID`、`QQ_CLIENT_SECRET`，然后重新部署。若两个业务共用同一云端数据库，平台连接地址也可使用同一地址；不要上传父项目本机数据库口令，也不要使用 localhost。配置完成后以 `x-schema-token` 调用 `POST /api/admin/migrate` 初始化机器人 schema，验证后保持 verify 模式。尚未完成数据库初始化和真实 QQ 验收，不能称为完整上线。
 
 生产登录仍待解决：上级网站 auth.ts 仅设置默认 Cookie 属性，没有跨子域 Cookie 配置；vercel.app 与 breezever.com 不能直接共享登录状态，仅给 Bot 分配兄弟子域也不保证会话自动共享。需要正式共享 Cookie 或同域代理/SSO 方案，不得绕过管理员身份检查。QQ 回调路径为 `/api/webhook`；接入前核对部署保护是否允许 QQ 的外部请求。
 
 ### 部署后验证补充
 
 提交 `7ae51a5` 已由 GitHub 自动触发部署 `dpl_5wWJQynqYRZE8Zj6cV7Mth3Rk3Mi`，Vercel 显示 Ready，正式别名仍为 `https://bpebot.vercel.app`。本机对该域名的普通 HTTP 检查和 CLI curl 检查均超时，因此没有宣称页面访问或 QQ 回调已验证成功。CLI curl 自动创建了项目级 Protection Bypass for Automation secret；该 secret 未写入源码或输出值，后续可在 Deployment Protection 中撤销。未关闭部署保护。
+## 内网平台数据库与登录链接修复（2026-11-08）
+
+用户明确不填写 PLATFORM_DATABASE_URL：浏览器控制台现在默认通过平台已有 /api/account/admin-check 校验实时管理员权限，不访问平台数据库，也不再回退至 Bot 数据库。显式填写平台连接时保留直接查询模式。平台 admin-check 匿名访问已验证 401；真实管理员联调仍待共享登录接入。QQ 侧按绑定用户 ID 查平台管理员的接口适配尚未实现，无直接平台连接时明确拒绝，不能因此绕过角色限制。
+
+修正平台登录链接为 https://radio.breezever.com/#/account：线上 /account、/login 均验证 404，本地平台采用 hash 路由。链接修复不解决 breezever.com 与 vercel.app 的会话共享。用户仍需配置机器人自己的云端 DATABASE_URL 和 QQ 凭据。该兼容接口阶段未修改平台代码；后续 SSO 阶段已新增专用接入，详见下节。
+
+## 授权码 SSO 交接（2026-11-08，优先于前文 Cookie 接入限制）
+
+用户要求改为 SSO，生产模式为 PLATFORM_AUTH_MODE=sso。Bot 端新增授权启动、回调、同源 POST 退出和独立加密 HttpOnly Cookie；上级平台新增授权码、令牌兑换、实时身份校验和撤销接口。不共享平台 Cookie，不连接平台数据库。state 五分钟、PKCE S256、授权码一分钟、数据库原子一次性兑换、专用服务器密钥和严格回调白名单均已实现。
+
+上级平台已通过现有 SSH 配置完成最小覆盖部署，当前镜像 breezever-app:bpebot-sso-20261108，原镜像 breezever-app:2.0.0-20261107150331557 保留。服务器 /opt/breezever/backups/bpebot-sso-20261108 保存回退配置；只修改当前生产 API 的 SSO 挂载和新增模块、专用配置、受保护服务器端点的地域例外，没有全量发布父仓库未提交代码。父项目本地对应修改为 server/bot-sso.ts、server/bot-sso-core.ts、server/api.ts 的挂载、deploy/compose.yml 两项环境配置和 deploy/nginx.conf 的三个服务器 POST 端点地域例外。独立仓库含 platform-integration 源码副本和 SSO.md，后续完整平台发布须纳入这些变更。
+
+两端共享密钥已生成，存放在 Vercel Secret、Bot 被忽略的 .env.local 和服务器受限环境文件中，不得输出或提交。Vercel 生产 PLATFORM_AUTH_MODE 已设置为 sso，需要本次新代码部署后生效。平台线上 authorize 桥接页验证 200，包含正确 /#/account 链接；匿名 token 请求 401，有专用密钥但无效授权码请求 400。父平台应用健康检查通过。
+
+真实 PostgreSQL SSO 集成 10 项通过，覆盖并发兑换只能成功一次、过期码、错误 PKCE、错误密钥、非管理员、撤权、会话失效、退出撤销与摘要存储。浏览器及 Bot 单元验证结果见后续记录。Bot 自身数据库、QQ 凭据和真实管理员账号线上登录验收仍待完成。QQ 侧按用户 ID 的权限适配仍未实现，不得把管理员浏览器令牌用于其他用户。
+
+SSO 验证最终结果：常规测试 79 项通过、2 项按需数据库入口跳过；真实 PostgreSQL SSO 集成 10 项通过；原控制台浏览器检查 6 项通过；SSO 浏览器检查 2 项通过（平台 localhost、Bot 127.0.0.1，使用不同主机名的 Cookie，覆盖完整登录、退出和旧 Cookie 重放被拒绝）。两端生产构建通过。本机临时数据库均由测试清理。

@@ -19,7 +19,13 @@ npm run dev
 
 ## 接入原平台
 
-没有新增注册、密码或角色系统。`PLATFORM_URL` 指向原平台，登录后由服务端转发当前 Cookie 至 `/api/auth/get-session` 验证会话，并从平台数据库 `public."user"` 实时查询管理员角色。`PLATFORM_DATABASE_URL` 应指向已有平台数据库；未设置时使用 `DATABASE_URL`，只有机器人与平台共用数据库时才适用。
+生产部署使用授权码 SSO，完整接入和运维说明见 [SSO.md](./SSO.md)。设置 `PLATFORM_AUTH_MODE=sso` 后，不再依赖跨域平台 Cookie，也不需要 `PLATFORM_DATABASE_URL`。以下 Cookie 转发模式仅用于保留兼容；SSO 模式优先。
+
+没有新增注册、密码或角色系统。`PLATFORM_URL` 指向原平台。未填写 `PLATFORM_DATABASE_URL` 时，Bot 转发当前 Cookie 至 `/api/auth/get-session` 验证会话，再调用平台已有的 `/api/account/admin-check` 实时校验管理员权限；平台在内网查询自己的数据库，Bot 不需要连接它。接口缺失、出错、返回不合法或拒绝访问时均拒绝授权。
+
+显式填写 `PLATFORM_DATABASE_URL` 时保留直接查询平台角色的模式；不再回退到机器人 `DATABASE_URL`。QQ 事件仅凭绑定用户 ID 校验平台管理员的流程暂不支持 API 模式，无直接连接或专用可信适配时明确拒绝，不能冒充浏览器会话。
+
+平台登录入口是 `/#/account`，不是 `/account`。默认跳转已与现有平台的 hash 路由一致。
 
 浏览器必须把平台会话 Cookie 发给控制台。开发时同一个主机名的不同端口可共享 Cookie，请勿混用 `localhost` 和 `127.0.0.1`。生产建议通过反向代理使用同一主机，或由平台显式配置安全的共享 Cookie 域。单独部署到无关域名时不能直接复用 Cookie，仍需设计正式的单点登录交接。控制台使用 `/dashboard`，代理时注意与原平台的路径冲突。
 

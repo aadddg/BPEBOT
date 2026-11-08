@@ -1,11 +1,55 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AuthError, createAuth, assertSameOrigin, validSchemaToken, platformBaseUrl } from '../lib/auth';
+import { AuthError, createAuth, assertSameOrigin, validSchemaToken, platformBaseUrl, platformLoginUrl } from '../lib/auth';
 
-const env = { ...process.env, PLATFORM_URL: 'https://platform.example', APP_URL: 'https://bot.example' };
+const env = { ...process.env, PLATFORM_DATABASE_URL: '', PLATFORM_URL: 'https://platform.example', APP_URL: 'https://bot.example' };
 const session = { user: { id: 'u1', name: 'Admin', role: 'admin' }, session: { id: 's1', userId: 'u1', expiresAt: '2030-01-01T00:00:00Z' } };
 const cookie = new Headers({ cookie: 'breezever.session_token=opaque' });
 const fetchSession = (value: unknown = session) => (async () => Response.json(value)) as typeof fetch;
+
+test('platform login uses the existing hash route instead of a nonexistent account path', () => {
+  assert.equal(platformLoginUrl(env), 'https://platform.example/#/account');
+});
+
+test('without platform database, checks the live admin API using the same session cookie every time', async () => {
+  let role = 'admin';
+  const paths: string[] = [];
+  const auth = createAuth({ env: { ...env, DATABASE_URL: 'postgresql://bot-only.invalid/bot' }, fetch: (async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    paths.push(path);
+    assert.equal(options?.cache, 'no-store');
+    assert.equal(options?.redirect, 'error');
+    assert.equal(new Headers(options?.headers).get('cookie'), cookie.get('cookie'));
+    assert.equal(new Headers(options?.headers).get('authorization'), null);
+    if (path === '/api/auth/get-session') return Response.json(session);
+    assert.equal(path, '/api/account/admin-check');
+    return role === 'admin' ? Response.json({ status: 'ok' }) : Response.json({ error: 'denied' }, { status: 403 });
+  }) as typeof fetch });
+  assert.equal((await auth.requireAdmin(cookie)).user.id, 'u1');
+  role = 'user';
+  await assert.rejects(auth.requireAdmin(cookie), (e: AuthError) => e.status === 403);
+  assert.deepEqual(paths, ['/api/auth/get-session', '/api/account/admin-check', '/api/auth/get-session', '/api/account/admin-check']);
+  await assert.rejects(auth.isPlatformAdmin('u1'), (e: AuthError) => e.status === 503);
+});
+
+test('admin API fails closed for expired, unavailable, redirected, malformed, and oversized responses', async () => {
+  const cases: [() => Response, number][] = [
+    [() => Response.json({}, { status: 401 }), 401],
+    [() => Response.json({}, { status: 403 }), 403],
+    [() => Response.json({}, { status: 404 }), 503],
+    [() => Response.json({}, { status: 503 }), 503],
+    [() => new Response(null, { status: 302, headers: { location: 'https://evil.example' } }), 503],
+    [() => Response.json({}), 503],
+    [() => Response.json(null), 503],
+    [() => Response.json({ status: 'denied' }), 503],
+    [() => new Response('<html>login</html>'), 503],
+    [() => new Response('x'.repeat(65537)), 503],
+  ];
+  for (const [response, expected] of cases) {
+    const auth = createAuth({ env, fetch: (async (url) => new URL(String(url)).pathname === '/api/auth/get-session' ? Response.json(session) : response()) as typeof fetch });
+    await assert.rejects(auth.requireAdmin(cookie), (e: AuthError) => e.status === expected);
+  }
+});
 
 test('forwards cookie only, disables session caching, and queries authoritative user role', async () => {
   let checked = false;

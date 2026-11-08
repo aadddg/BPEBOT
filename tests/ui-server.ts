@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client, type ClientConfig } from 'pg';
 import { createSchemaManager } from '../lib/schema';
+import { createSsoService, ssoSchema, SsoError } from '../platform-integration/sso-core';
 
 export const APP_URL = 'http://127.0.0.1:3109';
 export const UI_SECRET = 'ui-only-qq-secret-never-display';
@@ -45,6 +46,8 @@ async function stopNext(child: ChildProcess | undefined) {
 
 /** Playwright global setup returns teardown, so assertion failures also drop the database. */
 export default async function startUiServer() {
+  const uiSso = process.env.BPEBOT_UI_SSO === '1';
+  const uiSsoSecret = randomBytes(48).toString('base64url');
   // Read the parent configuration without changing process.env or writing its database.
   const dotenv = require('dotenv') as { parse(text: string): Record<string, string> };
   const parentEnv = await readFile(resolve(root, '../.env'), 'utf8').catch((error: NodeJS.ErrnoException) => {
@@ -120,7 +123,7 @@ export default async function startUiServer() {
     const databaseUrl = url.href;
     database = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 5000 });
     await database.connect();
-    await database.query('CREATE TABLE public."user" (id text PRIMARY KEY, role text NOT NULL)');
+    await database.query("CREATE TABLE public.\"user\" (id text PRIMARY KEY, role text NOT NULL, name text NOT NULL DEFAULT 'Browser Test Administrator')");
     await database.query('INSERT INTO public."user" (id,role) VALUES ($1,$2),($3,$4)', ['ui-admin', 'admin', 'ui-member', 'user']);
     const schemaToken = `ui-schema-secret-${randomBytes(32).toString('hex')}`;
     const manager = createSchemaManager({ connect: async () => ({
@@ -141,22 +144,56 @@ export default async function startUiServer() {
         index === 22 ? 'UI successful reply' : null, index === 23 || index === 25 ? 'UI upstream unavailable' : null, index,
       ]);
     }
-    platform = createServer((request, response) => {
+    const ssoService = createSsoService(database, { secret: uiSsoSecret, redirectUri: APP_URL + '/api/sso/callback' });
+    if (uiSso) {
+      await database.query('CREATE TABLE public."session" (id text PRIMARY KEY,"userId" text REFERENCES public."user"(id),"expiresAt" timestamptz)');
+      await database.query("INSERT INTO public.\"session\" VALUES ('session-ui-admin','ui-admin',now()+interval '1 hour'),('session-ui-member','ui-member',now()+interval '1 hour')");
+      await database.query(ssoSchema);
+    }
+    platform = createServer(async (request, response) => {
       response.setHeader('cache-control', 'no-store');
       response.setHeader('content-type', 'application/json');
-      if (request.url !== '/api/auth/get-session' || request.method !== 'GET') {
+      if (uiSso && request.url?.startsWith('/api/bot-sso/')) {
+        try {
+          const url = new URL(request.url, 'http://127.0.0.1');
+          if (url.pathname.endsWith('/authorize') && request.method === 'GET') {
+            const cookie = request.headers.cookie || '';
+            const id = cookie.split(';').map(value => value.trim()).includes('test-session=admin') ? 'ui-admin' : 'ui-member';
+            const location = await ssoService.issue(Object.fromEntries(url.searchParams), { userId: id, sessionId: `session-${id}` });
+            response.writeHead(303, { location }).end(); return;
+          }
+          if (request.method !== 'POST') { response.writeHead(405).end('{}'); return; }
+          const parts: Buffer[] = []; let size = 0;
+          for await (const part of request) { size += part.length; if (size > 8192) throw new Error('too large'); parts.push(part); }
+          const body = JSON.parse(Buffer.concat(parts).toString()); const secret = request.headers['x-bpebot-client-secret'];
+          if (url.pathname.endsWith('/token')) { response.end(JSON.stringify(await ssoService.exchange(body, secret))); return; }
+          if (url.pathname.endsWith('/introspect')) { response.end(JSON.stringify(await ssoService.introspect(body.token, secret))); return; }
+          if (url.pathname.endsWith('/revoke')) { await ssoService.revoke(body.token, secret); response.end('{"status":"ok"}'); return; }
+          response.writeHead(404).end('{}');
+        } catch (error) { response.writeHead(error instanceof SsoError ? error.status : 503).end('{}'); }
+        return;
+      }
+      if (!['/api/auth/get-session', '/api/account/admin-check'].includes(request.url || '') || request.method !== 'GET') {
         response.writeHead(404).end('{}'); return;
       }
       const cookie = request.headers.cookie?.split(';').map(part => part.trim()).find(part => part.startsWith('test-session='));
       const id = cookie === 'test-session=admin' ? 'ui-admin' : cookie === 'test-session=member' ? 'ui-member' : null;
       if (!id) { response.writeHead(401).end('null'); return; }
+      if (request.url === '/api/account/admin-check') {
+        try {
+          const result = await database!.query('SELECT role FROM public."user" WHERE id=$1', [id]);
+          if (result.rows[0]?.role !== 'admin') { response.writeHead(403).end('{}'); return; }
+          response.end(JSON.stringify({ status: 'ok' }));
+        } catch { response.writeHead(503).end('{}'); }
+        return;
+      }
       // Both claim admin upstream: only the actual public.user role may authorize access.
       response.end(JSON.stringify({ user: { id, name: ADMIN_NAME, role: 'admin' },
         session: { id: `session-${id}`, userId: id, expiresAt: new Date(Date.now() + 3600_000).toISOString() } }));
     });
     await new Promise<void>((done, reject) => {
       platform!.once('error', reject);
-      platform!.listen(0, '127.0.0.1', () => { platform!.removeListener('error', reject); done(); });
+      platform!.listen(0, uiSso ? undefined : '127.0.0.1', () => { platform!.removeListener('error', reject); done(); });
     });
     const address = platform.address();
     if (!address || typeof address === 'string') throw new Error('Platform fixture failed to bind.');
@@ -165,8 +202,9 @@ export default async function startUiServer() {
     const redact = (chunk: Buffer) => secrets.reduce((value, secret) => value.replaceAll(secret, '[redacted]'), chunk.toString());
     child = spawn(process.execPath, [require.resolve('next/dist/bin/next'), 'dev', '--hostname', '127.0.0.1', '--port', '3109'], {
       cwd: root, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, DATABASE_URL: databaseUrl, PLATFORM_DATABASE_URL: databaseUrl,
-        PLATFORM_URL: `http://127.0.0.1:${address.port}`, APP_URL,
+      env: { ...process.env, DATABASE_URL: databaseUrl, PLATFORM_DATABASE_URL: '',
+        PLATFORM_AUTH_MODE: uiSso ? 'sso' : 'api', BPEBOT_SSO_CLIENT_SECRET: uiSsoSecret,
+        PLATFORM_URL: `http://${uiSso ? 'localhost' : '127.0.0.1'}:${address.port}`, APP_URL,
         DB_SCHEMA_MODE: 'auto', DB_SCHEMA_TOKEN: schemaToken, QQ_APP_ID: UI_APP_ID,
         QQ_CLIENT_SECRET: UI_SECRET, NEXT_TELEMETRY_DISABLED: '1' },
     });

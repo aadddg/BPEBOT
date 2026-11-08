@@ -1,0 +1,59 @@
+import express from 'express'
+import { fromNodeHeaders } from 'better-auth/node'
+import { auth } from './auth.js'
+import { pool } from './db.js'
+import { authBaseURL } from './config.js'
+import { createSsoService, ssoSchema, SsoError } from './bot-sso-core.js'
+
+export const botSsoRouter = express.Router()
+botSsoRouter.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  next()
+})
+botSsoRouter.use(express.json({ limit: '8kb' }))
+let initialization: Promise<void> | undefined
+async function service() {
+  const secret = process.env.BPEBOT_SSO_CLIENT_SECRET
+  const redirectUri = process.env.BPEBOT_SSO_REDIRECT_URI
+  if (!secret || !redirectUri) throw new SsoError(503, 'sso_not_configured')
+  const result = createSsoService(pool, { secret, redirectUri })
+  initialization ??= pool.query(ssoSchema).then(() => {}).catch(error => { initialization = undefined; throw error })
+  await initialization
+  return result
+}
+const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+botSsoRouter.get('/authorize', async (req, res) => {
+  try {
+    const sso = await service()
+    // Validate the entire callback allowlist before displaying any login links.
+    sso.authorization(req.query)
+    const account = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
+    if (!account) {
+      const continueUrl = new URL('/api/bot-sso/authorize', authBaseURL)
+      for (const [key, value] of Object.entries(req.query)) if (typeof value === 'string') continueUrl.searchParams.set(key, value)
+      res.type('html').send(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>登录 BPEBOT</title><main><h1>使用平台账号登录 BPEBOT</h1><p>请先在新页面完成平台登录，再回到此页面继续。</p><p><a href="/#/account" target="_blank" rel="noopener noreferrer">打开平台登录</a></p><p><a href="${escape(continueUrl.href)}">已完成登录，继续授权</a></p><p>授权链接五分钟内有效；过期后请从机器人管理台重新发起。</p></main></html>`)
+      return
+    }
+    const location = await sso.issue(req.query, { userId: account.user.id, sessionId: account.session.id })
+    res.redirect(303, location)
+  } catch (error) { failure(res, error) }
+})
+botSsoRouter.post('/:action', async (req, res) => {
+  try {
+    if (!req.is('application/json')) { res.status(415).json({ error: 'json_required' }); return }
+    // No browser cookies authorize these endpoints: a dedicated server secret is mandatory.
+    const sso = await service()
+    const secret = req.headers['x-bpebot-client-secret']
+    const body = req.body
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new SsoError(400, 'invalid_request')
+    if (req.params.action === 'token') { res.json(await sso.exchange(body, secret)); return }
+    if (req.params.action === 'introspect') { res.json(await sso.introspect(body.token, secret)); return }
+    if (req.params.action === 'revoke') { await sso.revoke(body.token, secret); res.json({ status: 'ok' }); return }
+    res.status(404).json({ error: 'not_found' })
+  } catch (error) { failure(res, error) }
+})
+function failure(res: express.Response, error: unknown) {
+  if (error instanceof SsoError) { res.status(error.status).json({ error: error.code }); return }
+  res.status(503).json({ error: 'sso_unavailable' })
+}

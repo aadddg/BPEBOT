@@ -19,6 +19,7 @@ export default async function LoginPage({
   searchParams: Promise<{ reason?: string }>;
 }) {
   const { reason } = await searchParams;
+  const sso = process.env.PLATFORM_AUTH_MODE === 'sso';
   let loginUrl: string | null = null;
   try {
     loginUrl = platformLoginUrl();
@@ -57,11 +58,11 @@ export default async function LoginPage({
               </Alert>
             )}
             <p className="text-sm leading-7 text-muted-foreground">
-              请先在平台完成登录，再返回此处。
+              {sso ? '点击下方按钮前往平台授权，完成后会返回管理台。' : '请先在平台完成登录，再返回此处。'}
             </p>
             {loginUrl ? (
               <Button render={<a href={loginUrl} />} nativeButton={false}>
-                前往平台登录
+                {sso ? '使用平台账号安全登录' : '前往平台登录'}
               </Button>
             ) : (
               <Alert>
@@ -71,15 +72,15 @@ export default async function LoginPage({
                 </AlertDescription>
               </Alert>
             )}
-            <Button
+            {!sso && <Button
               variant="outline"
               render={<Link href="/dashboard" />}
               nativeButton={false}
             >
               已在平台登录，进入管理台
-            </Button>
+            </Button>}
             <p className="text-xs leading-6 text-muted-foreground">
-              只有平台管理员可访问。平台与管理台需使用同一主机或正确配置共享登录域。
+              {sso ? '只有平台管理员可访问。登录由平台授权，无需共享平台 Cookie。' : '只有平台管理员可访问。平台与管理台需使用同一主机或正确配置共享登录域。'}
             </p>
           </CardContent>
         </Card>

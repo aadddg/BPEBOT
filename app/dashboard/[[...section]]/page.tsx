@@ -33,7 +33,7 @@ export default async function Dashboard({
   }
   return (
     <Suspense>
-      <Console userName={name} />
+      <Console userName={name} sso={process.env.PLATFORM_AUTH_MODE === 'sso'} />
     </Suspense>
   );
 }

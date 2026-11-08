@@ -247,7 +247,7 @@ function Status({ value }: { value: string }) {
     </Badge>
   );
 }
-export function Console({ userName = "管理员" }: { userName?: string }) {
+export function Console({ userName = "管理员", sso = false }: { userName?: string; sso?: boolean }) {
   const path = usePathname();
   const [data, setData] = useState<ConsoleState | null>(null);
   const [error, setError] = useState("");
@@ -369,6 +369,7 @@ export function Console({ userName = "管理员" }: { userName?: string }) {
             <span className="hidden text-xs text-muted-foreground sm:inline">
               {userName}
             </span>
+            {sso && <form action="/api/sso/logout" method="post"><Button type="submit" variant="ghost" size="sm">退出登录</Button></form>}
           </div>
         </header>
         <main className="mx-auto max-w-6xl p-4 pb-12 md:p-6 lg:p-8">
