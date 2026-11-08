@@ -288,3 +288,21 @@ export function parseModerationCommand(
     durationSeconds,
   };
 }
+
+/** Only server-generated OpenID mentions may enter the warning markup. */
+export function renderWarning(command: Command, action: ModerationAction, operator: string): string {
+  if (command.builtin_key !== 'warn' || action.action !== 'warn' || !/^[A-Za-z0-9_-]{1,256}$/u.test(operator)) fail('Invalid warning');
+  const mention = (id: string) => {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) fail('Invalid warning target');
+    return `<qqbot-at-user id="${id}" />`;
+  };
+  const target = action.targets.map(mention).join(' ');
+  const reason = (action.reason || '请遵守群规。').replace(/[\\`*_{}\[\]()#+.!|>~<&]/gu, '\\$&');
+  const variables: Record<string, string> = { target, reason, operator: `<qqbot-at-user id="${operator}" />` };
+  const body = command.reply_body.replace(/\{(target|reason|operator)\}/gu, (_, key: string) => variables[key]!);
+  // Seeded templates predate placeholders; always show who is being warned and why.
+  const result = [command.reply_body.includes('{target}') ? '' : target, body,
+    command.reply_body.includes('{reason}') ? '' : reason].filter(Boolean).join('\n');
+  if (!result.trim() || result.length > 10000) fail('Warning exceeds reply limit');
+  return result;
+}

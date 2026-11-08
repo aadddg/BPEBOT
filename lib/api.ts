@@ -1,6 +1,6 @@
 import { AuthError, assertSameOrigin, requireAdmin, isPlatformAdmin, validSchemaToken } from './auth';
 import { migrate } from './db';
-import { CommandValidationError, hasPermission, normalizeCommandMessage, resolveCommand, previewCommand, validateCommand, type Command } from './commands';
+import { CommandValidationError, hasPermission, normalizeCommandMessage, resolveCommand, previewCommand, validateCommand, parseModerationCommand, renderWarning, type Command } from './commands';
 import { QQClient, verifyWebhookSignature, signValidationResponse } from './qq';
 import { store, StoreError, objectInput, uuid, type BotStore, type Log, type LogFilters } from './store';
 
@@ -192,6 +192,8 @@ export function createApi(dependencies: ApiDependencies = {}) {
       const memberRole = boundedString(data.member_role ?? author.member_role, 32);
       let command: Command | null = null, status = isJoin ? 'unsupported' : 'ignored', error: string | null = null;
       let reply: string | null = null;
+      let replyType: 'text' | 'markdown' = 'text';
+      let actionParam: Record<string, unknown> = {}, targetOpenid: string | null = null, operatorOpenid: string | null = null;
       if (isMessage) {
         const commands = await db.getCommands();
         const reserved = /^\/(warn|ban)(?=\s|$)/iu.exec(message);
@@ -200,6 +202,24 @@ export function createApi(dependencies: ApiDependencies = {}) {
         if (reserved) {
           status = memberRole === 'admin' || memberRole === 'owner' ? 'unsupported' : 'denied';
           error = status === 'denied' ? 'Group administrator permission required.' : 'Moderation API is not verified; no action performed.';
+          if (status !== 'denied' && reserved[1].toLowerCase() === 'warn') {
+            if (!command) { status = 'ignored'; error = 'Warning command is disabled or unavailable.'; }
+            else {
+              operatorOpenid = member;
+              try {
+                const action = parseModerationCommand(command, message);
+                reply = renderWarning(command, action, member!);
+                replyType = 'markdown';
+                targetOpenid = action.targets[0];
+                actionParam = { ...action, outcome: 'warning' };
+              } catch (failure) {
+                if (!(failure instanceof CommandValidationError)) throw failure;
+                reply = '用法：@机器人 /warn @目标成员 [原因]。请通过 QQ 选择要警告的成员。';
+                actionParam = { action: 'warn', outcome: 'usage' };
+              }
+              status = 'pending'; error = null;
+            }
+          }
         } else if (command) {
           let admin = false;
           if (command.min_role === 'platform_admin') {
@@ -207,21 +227,21 @@ export function createApi(dependencies: ApiDependencies = {}) {
             admin = userId ? await platformAdmin(userId) : false;
           }
           if (!hasPermission(command, memberRole, admin)) { status = 'denied'; error = 'Command permission denied.'; }
-          else { status = 'pending'; reply = command.reply_body; }
+          else { status = 'pending'; reply = command.reply_body; replyType = command.reply_type; }
         } else status = 'miss';
       }
       if (isJoin) error = 'Join approval API is not verified; no action performed.';
       const log: Omit<Log, 'id' | 'created_at'> = {
         event_id: eventId, event_type: eventType, group_openid: group, member_openid: member,
-        target_openid: null, operator_openid: null, content: content.slice(0, 12000), matched_command_id: command?.id ?? null,
+        target_openid: targetOpenid, operator_openid: operatorOpenid, content: content.slice(0, 12000), matched_command_id: command?.id ?? null,
         action_type: isJoin ? 'approval' : /^\/(warn|ban)(?=\s|$)/iu.test(message) ? 'moderation' : 'message',
-        action_param: {}, reply_status: status, reply_body: null, error, msg_id: msgId, member_role: memberRole, raw_event: body,
+        action_param: actionParam, reply_status: status, reply_body: null, error, msg_id: msgId, member_role: memberRole, raw_event: body,
       };
       if (!await db.beginEvent(log)) return await respond({ op: 12, duplicate: true }, 200, 'duplicate');
       if (status === 'pending' && command) {
         try {
           qq ??= new QQClient({ appId: env.QQ_APP_ID, clientSecret: env.QQ_CLIENT_SECRET });
-          await qq.sendPassiveReply({ groupOpenid: group!, msgId: msgId!, replyType: command.reply_type, content: reply!, msgSeq: 1 });
+          await qq.sendPassiveReply({ groupOpenid: group!, msgId: msgId!, replyType, content: reply!, msgSeq: 1 });
           status = 'replied';
         } catch {
           // A timeout may occur after delivery. Keep the event claim and never blindly replay sends.

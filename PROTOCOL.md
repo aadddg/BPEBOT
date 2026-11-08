@@ -27,7 +27,11 @@
 
 ## 未开放的执行能力
 
-`GROUP_JOIN_REQUEST` 是否可订阅、入群策略与禁言接口均待目标应用验证。`QQClient.approveJoin()`、`muteMembers()` 会抛出明确的未支持错误；管理 API 返回 501。警告、禁言、快捷群管理目前也不执行，不能把解析器或界面配置视为联调完成。
+`GROUP_JOIN_REQUEST` 是否可订阅、入群策略与禁言接口均待目标应用验证。`QQClient.approveJoin()`、`muteMembers()` 会抛出明确的未支持错误；控制台快捷群管理 API 仍返回 501。
+
+群聊 `/warn` 已接入现有被动 Markdown 回复接口：仅已验签消息内的群主 / 管理员角色可触发，内置指令须启用。发送 `@机器人 /warn @目标成员 [原因]`，支持模板 `{target}`、`{reason}`、`{operator}`；未包含目标或参数不合法时仅返回文本用法，不记为已执行警告。旧模板没有占位符时补充目标与原因；原因中的 Markdown 控制字符转义。日志记录目标、操作者与 `action_param.outcome=warning/usage`，发送失败记 failed，保留事件声明、不自动重发。尚需用户在真实群确认 Markdown 送达和 @成员展示，不能将本地模拟测试视为实群验收。
+
+2026-11-08 核对的官方文档：群 @ 事件 `https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_at_message_create.html` 明确列出 `author.member_role`；发送群聊消息与 Markdown 文档确认现有 `msg_type=2` / `markdown.content` 及 `msg_id` / `msg_seq` 回复方式。不开放禁言或审批，不能把发送警告等同于改变成员权限。
 
 Token 只缓存于单实例内存；共享 Redis 缓存和发送限流尚未接入。外部发送超时可能已经送达，当前保留事件声明而不自动重发；中断后的对账与人工重试机制是下一阶段任务。
 

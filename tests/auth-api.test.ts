@@ -4,6 +4,7 @@ import { createApi, readBody, ADMIN_BODY_LIMIT } from '../lib/api';
 import { AuthError } from '../lib/auth';
 import { createStore, validatePolicy, type BotStore, type Log } from '../lib/store';
 import type { Command } from '../lib/commands';
+import type { PassiveReply } from '../lib/qq';
 
 const env = { ...process.env, APP_URL: 'https://bot.example', DB_SCHEMA_TOKEN: 'schema-test-token', QQ_APP_ID: '12345', QQ_CLIENT_SECRET: 'not-a-real-secret', PLATFORM_URL: 'https://platform.example' };
 const adminSession = { user: { id: 'u1', name: 'Admin', role: 'admin' as const }, session: { id: 's1', expiresAt: '2030-01-01' } };
@@ -11,6 +12,7 @@ const command: Command = { id: '00000000-0000-4000-8000-000000000001', keyword: 
 function fixture(commands: Command[] = [command]) {
   const claims = new Set<string>(), logs: Omit<Log, 'id' | 'created_at'>[] = [], audits: unknown[] = [];
   let replies = 0, writes = 0;
+  const sent: PassiveReply[] = [];
   const store = {
     getState: async () => ({ commands: [], logs: [], policies: [], requests: [], settings: {} }),
     getCommands: async () => commands, getPolicies: async () => [], listLogs: async () => ({ logs: [], total: 0, page: 1, limit: 20 }),
@@ -21,8 +23,8 @@ function fixture(commands: Command[] = [command]) {
     finishEvent: async (id: string, status: string, reply: string | null, error: string | null) => { const log = logs.find(item => item.event_id === id); if (log) { log.reply_status = status; log.reply_body = reply; log.error = error; } },
   } as unknown as BotStore;
   const api = createApi({ env, store, requireAdmin: async () => adminSession, isPlatformAdmin: async () => false,
-    verifySignature: () => true, qq: { sendPassiveReply: async () => { replies++; return {}; } } });
-  return { api, store, logs, audits, claims, replies: () => replies, writes: () => writes };
+    verifySignature: () => true, qq: { sendPassiveReply: async (reply) => { replies++; sent.push(reply); return {}; } } });
+  return { api, store, logs, audits, claims, sent, replies: () => replies, writes: () => writes };
 }
 function adminRequest(path: string, method = 'GET', body?: unknown, origin = 'https://bot.example') {
   return new Request(`https://bot.example/api/admin/${path}`, { method, headers: { origin, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -149,6 +151,70 @@ test('reserved moderation namespace cannot be overridden by custom high-priority
   assert.equal(f.logs[1].reply_status, 'unsupported'); assert.equal(f.replies(), 0);
   await f.api.webhook(event('', 'join1', 'member', 'GROUP_JOIN_REQUEST'));
   assert.equal(f.logs[2].reply_status, 'unsupported'); assert.equal(f.logs[2].action_type, 'approval');
+});
+
+const warning: Command = { ...command, keyword: '/warn', match_type: 'prefix', reply_type: 'markdown',
+  reply_body: '{target} 请遵守群规。原因：{reason} 操作人：{operator}', min_role: 'group_admin', builtin: true, builtin_key: 'warn' };
+
+test('owner warning sends a passive Markdown mention with audit fields and cannot replay', async () => {
+  const f = fixture([warning]);
+  const message = '/warn <qqbot-at-user id="target" /> 请勿刷屏';
+  assert.equal((await f.api.webhook(event(message, 'warn1', 'owner'))).status, 200);
+  assert.equal(f.logs[0].reply_status, 'replied');
+  assert.equal(f.logs[0].target_openid, 'target');
+  assert.equal(f.logs[0].operator_openid, 'm1');
+  assert.equal(f.logs[0].action_param.outcome, 'warning');
+  assert.deepEqual(f.sent[0], { groupOpenid: 'g1', msgId: 'msg1', msgSeq: 1, replyType: 'markdown',
+    content: '<qqbot-at-user id="target" /> 请遵守群规。原因：请勿刷屏 操作人：<qqbot-at-user id="m1" />' });
+  await f.api.webhook(event(message, 'warn1', 'owner'));
+  assert.equal(f.replies(), 1);
+});
+
+test('bare or invalid warning returns text usage without claiming a warning was executed', async () => {
+  for (const message of ['/warn', '/warn somebody', '/warn @target <script>bad</script>']) {
+    const f = fixture([warning]);
+    await f.api.webhook(event(message, 'usage', 'admin'));
+    assert.equal(f.logs[0].reply_status, 'replied');
+    assert.equal(f.logs[0].action_param.outcome, 'usage');
+    assert.equal(f.logs[0].target_openid, null);
+    assert.equal(f.sent[0].replyType, 'text');
+    assert.match(f.sent[0].content, /\/warn/u);
+  }
+});
+
+test('warnings enforce enabled command and signed group role, never platform-admin substitution', async () => {
+  for (const role of ['member', '', 'administrator']) {
+    const f = fixture([warning]);
+    const api = createApi({ env, store: f.store, verifySignature: () => true, isPlatformAdmin: async () => true,
+      qq: { sendPassiveReply: async () => { throw new Error('must not send'); } } });
+    await api.webhook(event('/warn @target', 'denied', role));
+    assert.equal(f.logs[0].reply_status, 'denied');
+  }
+  const f = fixture([{ ...warning, enabled: false }]);
+  await f.api.webhook(event('/warn @target', 'disabled', 'owner'));
+  assert.equal(f.logs[0].reply_status, 'ignored');
+  assert.equal(f.replies(), 0);
+});
+
+test('warning escapes reason markup, fills old templates and supports nested author role', async () => {
+  const f = fixture([{ ...warning, reply_body: 'Please follow the group rules.' }]);
+  const request = new Request('https://bot.example/api/webhook', { method: 'POST', body: JSON.stringify({ op: 0, id: 'old-template', t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'msg1', group_openid: 'g1', author: { member_openid: 'm1', member_role: 'admin' }, content: '/warn @first @second **规则**' } }) });
+  await f.api.webhook(request);
+  assert.equal(f.logs[0].reply_status, 'replied');
+  assert.match(f.sent[0].content, /^<qqbot-at-user id="first" \/> <qqbot-at-user id="second" \/>/u);
+  assert.ok(f.sent[0].content.includes('\\*\\*规则\\*\\*'));
+});
+
+test('failed warning retains event claim and never reports success or retries', async () => {
+  const f = fixture([warning]); let attempts = 0;
+  const api = createApi({ env, store: f.store, verifySignature: () => true,
+    qq: { sendPassiveReply: async () => { attempts++; throw new Error('private upstream failure'); } } });
+  await api.webhook(event('/warn @target', 'failed-warn', 'owner'));
+  await api.webhook(event('/warn @target', 'failed-warn', 'owner'));
+  assert.equal(attempts, 1);
+  assert.equal(f.logs[0].reply_status, 'failed');
+  assert.ok(!f.logs[0].error?.includes('private'));
 });
 
 test('uncertain QQ delivery is retained and never retried', async () => {
