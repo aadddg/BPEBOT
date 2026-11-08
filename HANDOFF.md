@@ -99,3 +99,7 @@ npm run dev
 待用户在 Vercel 项目设置中补充生产环境的 `DATABASE_URL`、`PLATFORM_DATABASE_URL`、`QQ_APP_ID`、`QQ_CLIENT_SECRET`，然后重新部署。若两个业务共用同一云端数据库，平台连接地址也可使用同一地址；不要上传父项目本机数据库口令，也不要使用 localhost。配置完成后以 `x-schema-token` 调用 `POST /api/admin/migrate` 初始化机器人 schema，验证后保持 verify 模式。尚未完成数据库初始化和真实 QQ 验收，不能称为完整上线。
 
 生产登录仍待解决：上级网站 auth.ts 仅设置默认 Cookie 属性，没有跨子域 Cookie 配置；vercel.app 与 breezever.com 不能直接共享登录状态，仅给 Bot 分配兄弟子域也不保证会话自动共享。需要正式共享 Cookie 或同域代理/SSO 方案，不得绕过管理员身份检查。QQ 回调路径为 `/api/webhook`；接入前核对部署保护是否允许 QQ 的外部请求。
+
+### 部署后验证补充
+
+提交 `7ae51a5` 已由 GitHub 自动触发部署 `dpl_5wWJQynqYRZE8Zj6cV7Mth3Rk3Mi`，Vercel 显示 Ready，正式别名仍为 `https://bpebot.vercel.app`。本机对该域名的普通 HTTP 检查和 CLI curl 检查均超时，因此没有宣称页面访问或 QQ 回调已验证成功。CLI curl 自动创建了项目级 Protection Bypass for Automation secret；该 secret 未写入源码或输出值，后续可在 Deployment Protection 中撤销。未关闭部署保护。
