@@ -21,9 +21,9 @@ Bot 的管理写入继续要求同源 Origin。SSO 的服务器 POST 接口不�
 | --- | --- |
 | Bot / Vercel | `PLATFORM_AUTH_MODE=sso` |
 | Bot / Vercel | `PLATFORM_URL=https://radio.breezever.com` |
-| Bot / Vercel | `APP_URL=https://bpebot.vercel.app` |
+| Bot / Vercel | `APP_URL=https://bpebot.breezever.com` |
 | 两端 | `BPEBOT_SSO_CLIENT_SECRET`，同一个随机密钥，至少 32 字符 |
-| 上级平台 | `BPEBOT_SSO_REDIRECT_URI=https://bpebot.vercel.app/api/sso/callback` |
+| 上级平台 | `BPEBOT_SSO_REDIRECT_URI=https://bpebot.breezever.com/api/sso/callback` |
 
 不需要填写 `PLATFORM_DATABASE_URL`。Bot 自己的 `DATABASE_URL` 仍用于机器人指令、日志等业务数据；SSO 登录本身不使用 Bot 数据库。
 
@@ -49,3 +49,7 @@ npx tsx --test tests/sso-integration.test.ts
 ```
 
 集成检查只创建并清理本机临时数据库，覆盖角色撤销、原会话失效、令牌撤销和并发一次性兑换。真实管理员账号的线上交互仍需账号持有人完成；测试不创建生产管理员，也不绕过登录。
+
+## 当前部署验证
+
+用户在部署过程中绑定了自定义域名并配置了云端数据库和 QQ 凭据。线上 APP_URL 和平台回调已统一为 https://bpebot.breezever.com。部署 f9aae30 已 Ready；自定义域名登录页返回 200，SSO 启动返回 303，匿名管理接口返回 401；中国网络访问平台授权桥接返回 200。迁移接口已实际返回 200、ok=true、currentVersion=1、applied=[1]，机器人 Schema 初始化完成，保持 verify 模式。平台管理员本人尚需完成一次真实登录；QQ 平台握手和消息闭环尚未验收。

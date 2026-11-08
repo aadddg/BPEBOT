@@ -120,3 +120,9 @@ npm run dev
 真实 PostgreSQL SSO 集成 10 项通过，覆盖并发兑换只能成功一次、过期码、错误 PKCE、错误密钥、非管理员、撤权、会话失效、退出撤销与摘要存储。浏览器及 Bot 单元验证结果见后续记录。Bot 自身数据库、QQ 凭据和真实管理员账号线上登录验收仍待完成。QQ 侧按用户 ID 的权限适配仍未实现，不得把管理员浏览器令牌用于其他用户。
 
 SSO 验证最终结果：常规测试 79 项通过、2 项按需数据库入口跳过；真实 PostgreSQL SSO 集成 10 项通过；原控制台浏览器检查 6 项通过；SSO 浏览器检查 2 项通过（平台 localhost、Bot 127.0.0.1，使用不同主机名的 Cookie，覆盖完整登录、退出和旧 Cookie 重放被拒绝）。两端生产构建通过。本机临时数据库均由测试清理。
+
+### SSO 上线最终状态
+
+提交 f9aae30 已由 GitHub 自动部署，Vercel 部署 dpl_7UoNvUJodX6BTG38y5eiU51wXmPH 显示 Ready。期间检测到用户已绑定 bpebot.breezever.com、设置 APP_URL 并填入云端 DATABASE_URL 与 QQ 凭据；平台回调已同步更改为 https://bpebot.breezever.com/api/sso/callback，应用再次健康。机器人迁移通过已认证服务器调用完成，返回 HTTP 200、ok=true、currentVersion=1、applied=[1]。DB_SCHEMA_MODE 仍为 verify。
+
+线上自定义域名 /login=200、包含 SSO 登录按钮；/api/sso/start=303，回调地址正确；匿名 /api/admin/state=401。中国网络访问上级 SSO authorize 桥接=200、包含正确 /#/account 登录链接。国外服务器访问浏览器授权页=403 符合原地域策略，服务器端 token/introspect/revoke 专用 POST 端点才有受保护例外。真实管理员线上登录和 QQ 握手仍需验收。传输用临时密钥文件已删除，两端配置及被忽略本地副本保留。
