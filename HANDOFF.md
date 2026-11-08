@@ -87,3 +87,15 @@ npm run dev
 ## 独立仓库交接（2026-11-08）
 
 用户授权仅发布 BPEBOT，仓库名为 BPEBOT，公开可见；许可证原样沿用上级项目 AGPL-3.0。父项目代码、父项目 Git 历史、依赖目录、构建产物、测试截图和真实环境配置不进入此独立仓库。后续在本目录内进行提交。发布仓库不等于已部署，也不代表 Vercel CI 已启用。
+
+## Vercel 部署交接（2026-11-08）
+
+用户已授权通过 CLI 操作 Vercel，并已完成账号登录。原平台公网地址为 `https://radio.breezever.com`；首页与匿名 `/api/auth/get-session` 均验证 HTTP 200，匿名会话返回 null。
+
+已创建并部署项目 `669497935qqcoms-projects/bpebot`，项目 ID `prj_tESwINAAps2PrxMP3JZEgMbBpAIX`，正式访问地址 `https://bpebot.vercel.app`。首轮部署 ID `dpl_97frbunqcfj8Log5ATbLPQqeZhXu` 已 Ready。GitHub 仓库 `aadddg/BPEBOT` 已连接自动部署。项目根目录为 `.`，Next.js 框架，云端 Node.js 26.x。本机重新执行生产构建通过。
+
+已配置生产环境的 `PLATFORM_URL`、`APP_URL`、`DB_SCHEMA_MODE=verify`、随机生成的 `DB_SCHEMA_TOKEN`；平台地址同时配置了 Preview。迁移令牌只存 Vercel Secret 和本机被忽略的 `.env.local`，不要输出或提交。`.vercel/` 和 `.env.local` 均忽略。
+
+待用户在 Vercel 项目设置中补充生产环境的 `DATABASE_URL`、`PLATFORM_DATABASE_URL`、`QQ_APP_ID`、`QQ_CLIENT_SECRET`，然后重新部署。若两个业务共用同一云端数据库，平台连接地址也可使用同一地址；不要上传父项目本机数据库口令，也不要使用 localhost。配置完成后以 `x-schema-token` 调用 `POST /api/admin/migrate` 初始化机器人 schema，验证后保持 verify 模式。尚未完成数据库初始化和真实 QQ 验收，不能称为完整上线。
+
+生产登录仍待解决：上级网站 auth.ts 仅设置默认 Cookie 属性，没有跨子域 Cookie 配置；vercel.app 与 breezever.com 不能直接共享登录状态，仅给 Bot 分配兄弟子域也不保证会话自动共享。需要正式共享 Cookie 或同域代理/SSO 方案，不得绕过管理员身份检查。QQ 回调路径为 `/api/webhook`；接入前核对部署保护是否允许 QQ 的外部请求。

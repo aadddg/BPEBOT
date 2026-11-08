@@ -13,7 +13,7 @@ Copy-Item .env.example .env.local
 npm run dev
 ```
 
-控制台默认端口 `3100`，入口 `/dashboard`。生产环境执行 `npm run build` 和 `npm start`。Vercel 项目根目录选择 `BPEBOT`，运行时使用 Node.js。
+控制台默认端口 `3100`，入口 `/dashboard`。生产环境执行 `npm run build` 和 `npm start`。从独立 GitHub 仓库 `aadddg/BPEBOT` 导入 Vercel 时，项目根目录选择默认 `./`，运行时使用 Node.js；仅从父仓库导入时才选择 `BPEBOT` 子目录。
 
 首次使用空数据库可临时设置 `DB_SCHEMA_MODE=auto`；初始化完成后生产环境改回 `verify`。`DATABASE_URL`、`DB_SCHEMA_MODE`、`DB_SCHEMA_TOKEN` 均必须填写。`skip` 不检查也不创建表。手动迁移入口为 `POST /api/admin/migrate`，使用 `x-schema-token` 验证；不要将该值放入网页或浏览器代码。
 
